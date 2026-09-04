@@ -4,6 +4,7 @@ shell: /bin/bash
 dependencies:
   - stage: base
   - stage: kernel-build
+  - stage: kernel
   - image: "{{ .LLVM_IMAGE }}:{{ .TOOLS_REV }}"
 steps:
   - env:
@@ -33,15 +34,37 @@ steps:
         # (confirmed 2026-09-04: node dmesg showed "snd"/"snd-pcm" as
         # "module not found" while dante-pcie itself was found fine, just
         # failed on their unresolved symbols).
-        SND_KO=/src/sound/core/snd.ko
-        SND_PCM_KO=/src/sound/core/snd-pcm.ko
-        test -f "$SND_KO" || { echo "FATAL: $SND_KO not found - CONFIG_SND path may have changed, check kernel-build output"; exit 1; }
-        test -f "$SND_PCM_KO" || { echo "FATAL: $SND_PCM_KO not found - CONFIG_SND_PCM path may have changed, check kernel-build output"; exit 1; }
-        cp "$SND_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/extras/
+        #
+        # Pull these from the `kernel` package's stage, NOT `kernel-build`.
+        # `kernel-build` only compiles - signing happens later, during the
+        # `kernel` package's own `make modules_install` (Kbuild signs at
+        # install time via CONFIG_MODULE_SIG, confirmed by the SIGN log line
+        # for dante-pcie.ko itself, which goes through its own modules_install
+        # right here). Grabbing snd.ko/snd-pcm.ko straight out of
+        # kernel-build's /src (as this originally did) got the pre-sign,
+        # unsigned build artifact - confirmed 2026-09-04 via modinfo -F
+        # sig_key coming back empty for both, while dante-pcie.ko showed the
+        # real key. Would have been rejected outright under sig_enforce=1.
+        KVER=$(cat /src/include/config/kernel.release)
+        SND_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd.ko
+        SND_PCM_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd-pcm.ko
+        test -f "$SND_KO" || { echo "FATAL: $SND_KO not found - CONFIG_SND path may have changed, check the kernel stage's install output"; exit 1; }
+        test -f "$SND_PCM_KO" || { echo "FATAL: $SND_PCM_KO not found - CONFIG_SND_PCM path may have changed, check the kernel stage's install output"; exit 1; }
+        cp "$SND_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$KVER/extras/
     test:
       - |
         # https://www.kernel.org/doc/html/v4.15/admin-guide/module-signing.html#signed-modules-and-stripping
-        find /rootfs/usr/lib/modules -name '*.ko' -exec grep -FL '~Module signature appended~' {} \+
+        # NOTE: this used to be `find ... -exec grep -FL ... \+` alone, which
+        # only PRINTS unsigned .ko files - grep -L exits 0 either way, so it
+        # never actually failed the build. Confirmed 2026-09-04: it had
+        # already listed snd.ko/snd-pcm.ko as unsigned in a prior run and the
+        # build passed anyway. Now asserts zero unsigned files.
+        UNSIGNED=$(find /rootfs/usr/lib/modules -name '*.ko' -exec grep -FL '~Module signature appended~' {} \+)
+        if [ -n "$UNSIGNED" ]; then
+          echo "FATAL: unsigned .ko file(s) found:"
+          echo "$UNSIGNED"
+          exit 1
+        fi
       - |
         fhs-validator /rootfs
 finalize:
