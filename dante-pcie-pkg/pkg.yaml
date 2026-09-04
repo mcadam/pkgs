@@ -23,6 +23,21 @@ steps:
         cp /src/modules.builtin.modinfo /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/
 
         make -C /src M=$(pwd) LLVM=1 modules_install INSTALL_MOD_PATH=/rootfs/usr INSTALL_MOD_DIR=extras INSTALL_MOD_STRIP=1
+
+        # dante_pcie needs ALSA core (snd, snd-pcm) - CONFIG_SND*=m so the
+        # kernel-build stage compiles them, but Talos's imager only embeds
+        # modules listed in its own hack/modules-amd64.txt (upstream
+        # siderolabs/talos), which has zero sound/ entries - they'd never
+        # reach the installed image otherwise. Bundle the two we need into
+        # this extension instead of forking that upstream allowlist file too
+        # (confirmed 2026-09-04: node dmesg showed "snd"/"snd-pcm" as
+        # "module not found" while dante-pcie itself was found fine, just
+        # failed on their unresolved symbols).
+        SND_KO=/src/sound/core/snd.ko
+        SND_PCM_KO=/src/sound/core/snd-pcm.ko
+        test -f "$SND_KO" || { echo "FATAL: $SND_KO not found - CONFIG_SND path may have changed, check kernel-build output"; exit 1; }
+        test -f "$SND_PCM_KO" || { echo "FATAL: $SND_PCM_KO not found - CONFIG_SND_PCM path may have changed, check kernel-build output"; exit 1; }
+        cp "$SND_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/extras/
     test:
       - |
         # https://www.kernel.org/doc/html/v4.15/admin-guide/module-signing.html#signed-modules-and-stripping
