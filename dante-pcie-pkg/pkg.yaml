@@ -18,12 +18,11 @@ steps:
         make -C /src M=$(pwd) LLVM=1 EXTRA_CFLAGS="-Wno-error" modules
     install:
       - |
-        mkdir -p /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)
-        cp /src/modules.order /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/
-        cp /src/modules.builtin /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/
-        cp /src/modules.builtin.modinfo /rootfs/usr/lib/modules/$(cat /src/include/config/kernel.release)/
-
-        make -C /src M=$(pwd) LLVM=1 modules_install INSTALL_MOD_PATH=/rootfs/usr INSTALL_MOD_DIR=extras INSTALL_MOD_STRIP=1
+        KVER=$(cat /src/include/config/kernel.release)
+        mkdir -p /rootfs/usr/lib/modules/$KVER
+        cp /src/modules.order /rootfs/usr/lib/modules/$KVER/
+        cp /src/modules.builtin /rootfs/usr/lib/modules/$KVER/
+        cp /src/modules.builtin.modinfo /rootfs/usr/lib/modules/$KVER/
 
         # dante_pcie needs ALSA core (snd, snd-pcm) - CONFIG_SND*=m so the
         # kernel-build stage compiles them, but Talos's imager only embeds
@@ -39,18 +38,35 @@ steps:
         # `kernel-build` only compiles - signing happens later, during the
         # `kernel` package's own `make modules_install` (Kbuild signs at
         # install time via CONFIG_MODULE_SIG, confirmed by the SIGN log line
-        # for dante-pcie.ko itself, which goes through its own modules_install
-        # right here). Grabbing snd.ko/snd-pcm.ko straight out of
-        # kernel-build's /src (as this originally did) got the pre-sign,
+        # for dante-pcie.ko itself). Grabbing snd.ko/snd-pcm.ko straight out
+        # of kernel-build's /src (as this originally did) got the pre-sign,
         # unsigned build artifact - confirmed 2026-09-04 via modinfo -F
         # sig_key coming back empty for both, while dante-pcie.ko showed the
         # real key. Would have been rejected outright under sig_enforce=1.
-        KVER=$(cat /src/include/config/kernel.release)
         SND_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd.ko
         SND_PCM_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd-pcm.ko
         test -f "$SND_KO" || { echo "FATAL: $SND_KO not found - CONFIG_SND path may have changed, check the kernel stage's install output"; exit 1; }
         test -f "$SND_PCM_KO" || { echo "FATAL: $SND_PCM_KO not found - CONFIG_SND_PCM path may have changed, check the kernel stage's install output"; exit 1; }
+        mkdir -p /rootfs/usr/lib/modules/$KVER/extras
         cp "$SND_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$KVER/extras/
+
+        # IMPORTANT: snd.ko/snd-pcm.ko must land in extras/ BEFORE
+        # modules_install runs below, not after. `make modules_install`
+        # triggers Kbuild's own depmod pass, which is what actually generates
+        # modules.dep/modules.alias - the metadata Talos's
+        # KernelModuleSpecController resolves module names against (it does
+        # NOT do a raw directory scan). Confirmed 2026-09-04: with the copy
+        # happening AFTER modules_install (as this originally did), dante-pcie
+        # loaded fine (it WAS in that depmod pass) but snd/snd-pcm came back
+        # "module not found" on the real node even though the .ko files were
+        # verified present on the pushed image - they just never made it into
+        # the dependency metadata Talos actually reads.
+        make -C /src M=$(pwd) LLVM=1 modules_install INSTALL_MOD_PATH=/rootfs/usr INSTALL_MOD_DIR=extras INSTALL_MOD_STRIP=1
+
+        # Belt-and-suspenders: re-run depmod explicitly over the whole tree
+        # in case modules_install's internal depmod only touched the files it
+        # just installed rather than rescanning extras/ wholesale.
+        depmod -b /rootfs/usr $KVER
     test:
       - |
         # https://www.kernel.org/doc/html/v4.15/admin-guide/module-signing.html#signed-modules-and-stripping
