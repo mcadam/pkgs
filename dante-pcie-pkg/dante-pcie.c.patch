@@ -1,0 +1,97 @@
+--- dante-pcie.c.orig	2020-05-25 09:04:34.000000000 +0000
++++ dante-pcie.c	2026-03-11 12:22:56.410893019 +0000
+@@ -301,11 +301,8 @@
+ 		}
+ 	}
+ 
+-	err = snd_pcm_lib_malloc_pages(substream, params_buffer_bytes(hw_params));
+-	if (err < 0) {
+-		printk(KERN_ERR "Unable malloc_pages (%d)\n", err);
+-		return -1;
+-	}
++	/* Buffer memory is managed automatically by snd_pcm_set_managed_buffer_all (kernel >= 5.14) */
++	err = 0;
+ 
+ 	/*
+ 	   Ensure that the buffer does not pass a 4GB boundary. The
+@@ -315,7 +312,6 @@
+ 	if (EXTRACT_LO_WORD(runtime->dma_addr) + params_buffer_bytes(hw_params) <
+ 	    EXTRACT_LO_WORD(runtime->dma_addr)) {
+ 		printk(KERN_ERR "Allocated pages span a 4GB boundary.");
+-		snd_pcm_lib_free_pages(substream);
+ 		return -ENXIO; /* FIXME: What is the right error code to use here */
+ 	}
+ 
+@@ -353,7 +349,8 @@
+ }
+ 
+ static int snd_dante_pcm_hw_free(struct snd_pcm_substream *substream) {
+-	return snd_pcm_lib_free_pages(substream);
++	/* Buffer memory is managed automatically (kernel >= 5.14) */
++	return 0;
+ }
+ 
+ static int snd_dante_pcm_prepare(struct snd_pcm_substream *substream) {
+@@ -672,7 +669,7 @@
+ 
+ 	/* Initialise hardware */
+ 	chip->bar0_addr = pci_resource_start(chip->pci, 0);
+-	chip->bar0 = ioremap_nocache(chip->bar0_addr, pci_resource_len(chip->pci, 0));
++	chip->bar0 = ioremap(chip->bar0_addr, pci_resource_len(chip->pci, 0));
+ 	if (chip->bar0 == NULL) {
+ 		printk(KERN_ERR "ioremap error\n");
+ 		err = -ENXIO;
+@@ -680,7 +677,7 @@
+ 	}
+ 
+ 	chip->bar4_addr = pci_resource_start(chip->pci, 4);
+-	chip->bar4 = ioremap_nocache(chip->bar4_addr, pci_resource_len(chip->pci, 4));
++	chip->bar4 = ioremap(chip->bar4_addr, pci_resource_len(chip->pci, 4));
+ 	if (chip->bar4 == NULL) {
+ 		printk(KERN_ERR "ioremap error\n");
+ 		err = -ENXIO;
+@@ -717,13 +714,14 @@
+ 		      entry->msi_attrib.multiple = 2;
+ 		  }
+ 		}
+-#else
++#elif (LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0))
+ 		list_for_each_entry(entry, &chip->pci->dev.msi_list, list) {
+ 		  if (entry->irq == chip->pci->irq) {
+ 		      entry->msi_attrib.multiple = 2;
+ 		  }
+ 		}
+ #endif
++		/* Note: msi_list and msi_attrib removed in kernel 5.17+; Gennum fixup skipped */
+ 
+ 		/* Update the MSI control register to convice it to work correctly */
+ 		pos = pci_find_capability(chip->pci, PCI_CAP_ID_MSI);
+@@ -786,10 +784,10 @@
+ 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_dante_capture_ops);
+ 
+ 	/* pre-allocation of buffers, need contiguous memory */
+-	snd_pcm_lib_preallocate_pages_for_all(
++	snd_pcm_set_managed_buffer_all(
+ 				pcm, SNDRV_DMA_TYPE_DEV, &(chip->pci->dev),
+ 				DMA_SIZE, DMA_SIZE);
+-	
++
+ 	return 0;
+ error:
+ 	return err;
+@@ -807,13 +805,14 @@
+ 				entry->msi_attrib.multiple = 0;
+ 			}
+ 		}
+-#else
++#elif (LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0))
+ 		list_for_each_entry(entry, &chip->pci->dev.msi_list, list) {
+ 			if (entry->irq == chip->pci->irq) {
+ 				entry->msi_attrib.multiple = 0;
+ 			}
+ 		}
+ #endif
++		/* Note: msi_list and msi_attrib removed in kernel 5.17+; Gennum fixup skipped */
+ 	}
+ 
+ 	reset_device(chip);

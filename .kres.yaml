@@ -64,6 +64,7 @@ spec:
     # - kernel & dependent packages (out of tree kernel modules)
     #   kernel first, then packages in alphabetical order
     - kernel
+    - dante-pcie-pkg
     - drbd-pkg
     - ena-pkg
     - gasket-driver-pkg
