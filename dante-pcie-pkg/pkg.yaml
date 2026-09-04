@@ -43,12 +43,22 @@ steps:
         # unsigned build artifact - confirmed 2026-09-04 via modinfo -F
         # sig_key coming back empty for both, while dante-pcie.ko showed the
         # real key. Would have been rejected outright under sig_enforce=1.
+        # 2026-09-04 follow-up: fixing the depmod-ordering bug above surfaced
+        # a second layer - depmod could now actually resolve dante-pcie's
+        # symbols (those 8 warnings are gone), but revealed snd.ko itself
+        # needs `sound_class` (from soundcore.ko, CONFIG_SOUND=m - the legacy
+        # OSS compat class ALSA still registers device nodes through) and
+        # snd-pcm.ko needs snd_timer_new/notify/interrupt (from snd-timer.ko,
+        # CONFIG_SND_TIMER=m). Bundling those two as well.
+        SOUNDCORE_KO=/usr/lib/modules/$KVER/kernel/sound/soundcore.ko
         SND_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd.ko
+        SND_TIMER_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd-timer.ko
         SND_PCM_KO=/usr/lib/modules/$KVER/kernel/sound/core/snd-pcm.ko
-        test -f "$SND_KO" || { echo "FATAL: $SND_KO not found - CONFIG_SND path may have changed, check the kernel stage's install output"; exit 1; }
-        test -f "$SND_PCM_KO" || { echo "FATAL: $SND_PCM_KO not found - CONFIG_SND_PCM path may have changed, check the kernel stage's install output"; exit 1; }
+        for f in "$SOUNDCORE_KO" "$SND_KO" "$SND_TIMER_KO" "$SND_PCM_KO"; do
+          test -f "$f" || { echo "FATAL: $f not found - a CONFIG_SND*/CONFIG_SOUND path may have changed, check the kernel stage's install output"; exit 1; }
+        done
         mkdir -p /rootfs/usr/lib/modules/$KVER/extras
-        cp "$SND_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$KVER/extras/
+        cp "$SOUNDCORE_KO" "$SND_KO" "$SND_TIMER_KO" "$SND_PCM_KO" /rootfs/usr/lib/modules/$KVER/extras/
 
         # IMPORTANT: snd.ko/snd-pcm.ko must land in extras/ BEFORE
         # modules_install runs below, not after. `make modules_install`
